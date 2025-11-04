@@ -18,12 +18,11 @@ const ALLOWED_HOSTS = [
   'gist.githubusercontent.com'
 ];
 
-// 是否启用路径访问限制（仅在设置为 true 时启用 ALLOWED_PATHS）
+// 是否启用路径访问限制（仅在 RESTRICT_PATHS = true 时生效）
 const RESTRICT_PATHS = false;
 
 // 路径白名单，仅在 RESTRICT_PATHS = true 时生效
 const ALLOWED_PATHS = ['library', 'user-id-1', 'user-id-2'];
-
 
 // ============================================================
 // ✅ REPO_TOKENS 配置说明（从 CF 环境变量读取）
@@ -35,8 +34,9 @@ const ALLOWED_PATHS = ['library', 'user-id-1', 'user-id-2'];
 //
 // 前端使用示例：
 // https://your-worker.workers.dev/https://ghcr.io/user/private-repo@token1:latest
+// https://your-worker.workers.dev/https://ghcr.io/user/private-repo:latest?token=token1
 //
-// Worker 内部自动将 “token1” 替换为真实的 “repo_token”，用户永远不会看到真实凭证。
+// Worker 内部会自动将 “token1” 替换为真实的 “repo_token”，用户永远不会看到真实凭证。
 // ============================================================
 
 
@@ -66,7 +66,7 @@ function getRepoTokensFromEnv(env) {
 function getEffectiveToken(targetUrl, env) {
   const REPO_TOKENS = getRepoTokensFromEnv(env);
 
-  // 匹配配置中定义的 url_token
+  // 优先匹配 REPO_TOKENS 配置
   const tokenEntry = REPO_TOKENS.find(entry =>
     targetUrl.startsWith(entry.url) &&
     entry.url_token &&
@@ -80,11 +80,11 @@ function getEffectiveToken(targetUrl, env) {
     const urlObj = new URL(targetUrl);
     let urlToken = null;
 
-    // 匹配 @token 格式
+    // 支持 @token 格式
     const atTokenMatch = urlObj.pathname.match(/@([^@:]+)(:|$)/);
     if (atTokenMatch) urlToken = atTokenMatch[1];
 
-    // 匹配 ?token=xxx 参数
+    // 支持 ?token=xxx 参数
     if (!urlToken && urlObj.searchParams.has('token')) {
       urlToken = urlObj.searchParams.get('token');
     }
@@ -137,15 +137,14 @@ function getEmptyBodySHA256() {
 // ============================================================
 // ✅ Worker 主逻辑
 // ============================================================
-// 负责：
+// 功能：
 // - 解析路径与目标 registry
-// - 进行域名/路径校验
-// - 处理 token 注入
-// - 支持 Docker v2 API / S3 / GitHub
-// - 自动处理重定向与鉴权
+// - 域名和路径白名单校验
+// - 注入 Authorization Token
+// - 支持 Docker v2 API / GitHub / S3
+// - 自动处理 401 鉴权及重定向
 // ============================================================
 async function handleRequest(request, redirectCount = 0, env) {
-  const MAX_REDIRECTS = 5;
   const url = new URL(request.url);
   let path = url.pathname;
 
@@ -180,7 +179,7 @@ async function handleRequest(request, redirectCount = 0, env) {
   let targetDomain, targetPath, isDockerRequest = false;
   const fullPath = path.startsWith('/') ? path.substring(1) : path;
 
-  // 支持多种输入格式：完整 URL / docker.io / ghcr.io 等
+  // ---- 解析目标域名和路径 ----
   if (fullPath.startsWith('https://') || fullPath.startsWith('http://')) {
     const urlObj = new URL(fullPath);
     targetDomain = urlObj.hostname;
@@ -231,7 +230,7 @@ async function handleRequest(request, redirectCount = 0, env) {
         : `https://${targetDomain}/${isV2Request ? 'v2/' : ''}${targetPath}`)
     : `https://${targetDomain}/${targetPath}`;
 
-  // ---- 请求头处理 ----
+  // ---- 构建请求头 ----
   const newRequestHeaders = new Headers(request.headers);
   newRequestHeaders.set('Host', targetDomain);
   newRequestHeaders.delete('x-amz-content-sha256');
@@ -261,7 +260,7 @@ async function handleRequest(request, redirectCount = 0, env) {
       redirect: 'manual'
     });
 
-    // Docker 401 授权处理
+    // ---- Docker 401 授权处理 ----
     if (isDockerRequest && response.status === 401) {
       const wwwAuth = response.headers.get('WWW-Authenticate');
       if (wwwAuth) {
@@ -283,7 +282,7 @@ async function handleRequest(request, redirectCount = 0, env) {
       }
     }
 
-    // Docker / S3 重定向处理
+    // ---- Docker / S3 重定向处理 ----
     if (isDockerRequest && (response.status === 302 || response.status === 307)) {
       const redirectUrl = response.headers.get('Location');
       if (redirectUrl) {
