@@ -23,8 +23,21 @@ function getConfig(env) {
       return defaultArray;
   }
 
-  const defaultAllowedHosts = [];
-
+  const defaultAllowedHosts = [
+  'quay.io',
+  'gcr.io',
+  'k8s.gcr.io',
+  'registry.k8s.io',
+  'ghcr.io',
+  'docker.cloudsmith.io',
+  'registry-1.docker.io',
+  'github.com',
+  'api.github.com',
+  'raw.githubusercontent.com',
+  'gist.github.com',
+  'gist.githubusercontent.com'
+  ];
+  
   const defaultAllowedPaths = [
       'library',
       'user-id-1',
